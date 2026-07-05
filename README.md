@@ -4,6 +4,8 @@ A full-stack recipe management web app built with **Flask** and **MongoDB Atlas*
 
 This project started as a local Flask + MongoDB app and was progressively hardened and shipped to the cloud: environment-based secrets, a redesigned UI, containerization, and a full AWS deployment pipeline (ECR → Secrets Manager → ECS Fargate).
 
+📄 **[Full deployment workflow write-up (PDF)](Recipe-Manager-Deployment-Workflow.pdf)** — architecture diagram, step-by-step pipeline, and lessons learned.
+
 ---
 
 ## Features
@@ -15,15 +17,22 @@ This project started as a local Flask + MongoDB app and was progressively harden
 - Containerized with Docker, served via Gunicorn (multi-worker, threaded)
 - Deployed on AWS ECS Fargate, image hosted in Amazon ECR, secrets in AWS Secrets Manager
 
-## Screenshots
+## Deployment Steps in Screenshots
 
-| Login | Dashboard |
-|---|---|
-| ![Login](screenshots/login.png) | ![Dashboard](screenshots/dashboard.png) |
+**Step 1 — Docker image built locally**
+![Step 1: Docker build](screenshots/step-1-docker-build.png)
 
-| Recipe Detail | Light Mode |
-|---|---|
-| ![Recipe Detail](screenshots/recipe-detail.png) | ![Light Mode](screenshots/light-mode.png) |
+**Step 2 — Image pushed to Amazon ECR**
+![Step 2: ECR repository](screenshots/step-2-ecr-repository.png)
+
+**Step 3 — Running on an ECS Fargate cluster**
+![Step 3: ECS cluster](screenshots/step-3-ecs-cluster.png)
+
+**Step 4 — Application login**
+![Step 4: Login page](screenshots/step-4-login.png)
+
+**Step 5 — Recipe detail view**
+![Step 5: Recipe detail](screenshots/step-5-recipe-detail.png)
 
 ## Tech Stack
 
@@ -111,6 +120,15 @@ aws ecs create-service \
 The running task's public IP can be found via `ecs describe-tasks` → its ENI → `ec2 describe-network-interfaces`.
 
 ---
+
+## Persistent Storage
+
+Fargate tasks are **ephemeral by design** — any file written inside the container's own filesystem is lost the moment the task restarts, redeploys, or scales. This app avoids that problem entirely by keeping all persistent data outside the container:
+
+- **All application data lives in MongoDB Atlas**, a managed database completely decoupled from the container lifecycle. Whether the task restarts, redeploys, or scales to multiple instances, every instance reads/writes the same external database — there's no per-container data silo.
+- **Sessions are stateless.** `Flask-Login` signs session cookies with `SECRET_KEY` and stores them client-side in the browser, not in server memory. Any instance can serve any request without a shared session store, since `SECRET_KEY` is identical across instances (injected from the same Secrets Manager secret).
+- **Write durability**: the Mongo connection string includes `retryWrites=true&w=majority`, meaning writes are acknowledged by a majority of the Atlas replica set before the app gets a success response — no risk of losing an acknowledged write to a single-node failure.
+- This app doesn't currently handle file uploads (e.g. recipe photos). If that were added, those files would need to go to **Amazon S3** rather than the container's local disk, for the same ephemeral-storage reason.
 
 ## Lessons Learned / Troubleshooting Notes
 
