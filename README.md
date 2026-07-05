@@ -101,7 +101,9 @@ Why each piece exists:
 | **ECS Fargate** | Serverless container hosting | No EC2 instances to provision, patch, or scale manually — AWS manages the underlying compute |
 | **CloudWatch Logs** | Centralized container stdout/stderr | Without it, debugging a crashed/restarted Fargate task means the logs are just gone |
 
-### Step 1 — Push the image to ECR
+### Part A — Build & publish the image (Docker → ECR)
+
+**Step 1 — Push the image to ECR**
 ```bash
 aws ecr create-repository --repository-name recipe-manager --region <region>
 aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
@@ -110,32 +112,55 @@ docker push <account-id>.dkr.ecr.<region>.amazonaws.com/recipe-manager:latest
 ```
 This builds the image once locally, then uploads it to a private repository only your AWS account (and IAM roles you grant) can pull from.
 
-### Step 2 — Store secrets in Secrets Manager
+**Step 2 — Verify the image actually landed in ECR**
+Don't just trust the push output — confirm the image is really sitting in the registry before wiring it into a task definition:
+```bash
+aws ecr describe-images --repository-name recipe-manager --region <region>
+```
+Look for your tag (e.g. `"imageTags": ["latest"]`) in the output. You can also check `imagePushedAt` and `imageSizeInBytes` to confirm it's the build you expect. This is also visible in the console under **ECR → Repositories → recipe-manager → Images** (see [Step 2 screenshot](screenshots/step-2-ecr-repository.png) below).
+
+**Step 3 — Store secrets in Secrets Manager**
 ```bash
 aws secretsmanager create-secret --name recipe-manager/mongo-uri --secret-string "<your-mongo-uri>" --region <region>
 aws secretsmanager create-secret --name recipe-manager/secret-key --secret-string "<your-secret-key>" --region <region>
 ```
 Each command returns an ARN — that ARN (not the secret value itself) is what gets referenced in the task definition below.
 
-### Step 3 — Register the task definition
+---
+
+### Part B — Deploy to Fargate
+
+This is the Fargate-specific half of the pipeline: everything from here on defines *how the ECR image actually runs*, with no EC2 instances involved anywhere.
+
+**Step 4 — Register the ECS task definition**
 ```
 ECR image URI  ---\
                     >---  ECS Task Definition (recipe-manager-task)
 Secret ARNs    ---/            |
-                                +--- CPU: 256, Memory: 512 (Fargate-compatible)
+                                +--- requiresCompatibilities: ["FARGATE"]
+                                +--- CPU: 256, Memory: 512 (Fargate-compatible sizing)
                                 +--- Port mapping: container 5000
                                 +--- Log group: /ecs/recipe-manager
 ```
-See [`task-definition.example.json`](task-definition.example.json) for the full template. Fill in your account ID, region, and the two secret ARNs from Step 2, then:
+See [`task-definition.example.json`](task-definition.example.json) for the full template. Fill in your account ID, region, and the two secret ARNs from Step 3, then:
 ```bash
 aws ecs register-task-definition --cli-input-json file://task-definition.json --region <region>
 ```
 
-### Step 4 — Create the cluster, security group, and service
+**Step 5 — Create the Fargate cluster**
 ```bash
 aws ecs create-cluster --cluster-name recipe-manager-cluster --region <region>
+```
+A cluster is just a logical namespace — on Fargate there's no underlying EC2 capacity to provision here, unlike an EC2 launch type.
+
+**Step 6 — Open network access**
+```bash
 aws ec2 create-security-group --group-name recipe-manager-sg --description "Recipe manager SG" --vpc-id <vpc-id>
 aws ec2 authorize-security-group-ingress --group-id <sg-id> --protocol tcp --port 5000 --cidr 0.0.0.0/0
+```
+
+**Step 7 — Create the Fargate service**
+```bash
 aws ecs create-service \
   --cluster recipe-manager-cluster \
   --service-name recipe-manager-service \
@@ -144,15 +169,15 @@ aws ecs create-service \
   --launch-type FARGATE \
   --network-configuration "awsvpcConfiguration={subnets=[<subnet-ids>],securityGroups=[<sg-id>],assignPublicIp=ENABLED}"
 ```
-The **cluster** is just a logical grouping; the **service** is what actually keeps `desiredCount` tasks running, replacing any that crash. `awsvpc` networking gives the Fargate task its own elastic network interface (ENI) with a real public IP.
+The **service** (not the cluster) is what actually keeps `desiredCount` Fargate tasks running, automatically replacing any that crash. `--launch-type FARGATE` combined with `awsvpcConfiguration` is what gives each task its own elastic network interface (ENI) and public IP — this is the line that makes it Fargate instead of EC2-backed ECS.
 
-### Step 5 — Find the running task and verify it
+**Step 8 — Find the running task and verify it**
 ```bash
 aws ecs list-tasks --cluster recipe-manager-cluster --region <region>
 aws ecs describe-tasks --cluster recipe-manager-cluster --tasks <task-arn> --region <region>
 aws ec2 describe-network-interfaces --network-interface-ids <eni-id> --region <region>
 ```
-The last command's `Association.PublicIp` is the address the app is reachable at. Watch logs with:
+The last command's `Association.PublicIp` is the address the app is reachable at (see [Step 3 screenshot](screenshots/step-3-ecs-cluster.png) for the cluster/service view in the console). Watch container logs with:
 ```bash
 aws logs tail /ecs/recipe-manager --region <region> --since 15m
 ```
