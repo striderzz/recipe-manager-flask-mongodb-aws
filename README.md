@@ -34,6 +34,9 @@ This project started as a local Flask + MongoDB app and was progressively harden
 **Step 5 — Recipe detail view**
 ![Step 5: Recipe detail](screenshots/step-5-recipe-detail.png)
 
+**Step 6 — Recipe dashboard**
+![Step 6: Dashboard](screenshots/step-6-dashboard.png)
+
 ## Tech Stack
 
 **Backend:** Flask, Flask-Login, Flask-PyMongo, Gunicorn
