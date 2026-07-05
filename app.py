@@ -1,11 +1,15 @@
+import os
+from dotenv import load_dotenv
 from flask import Flask, request, render_template, redirect, url_for
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_pymongo import PyMongo
 from bson.objectid import ObjectId
 from werkzeug.security import generate_password_hash, check_password_hash
 
+load_dotenv()
+
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'
+app.secret_key = os.environ["SECRET_KEY"]
 
 # Flask-Login setup
 login_manager = LoginManager()
@@ -13,8 +17,9 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # Set up MongoDB connection
-app.config["MONGO_URI"] = ""
+app.config["MONGO_URI"] = os.environ["MONGO_URI"]
 mongo = PyMongo(app)
+
 
 recipes = mongo.db.recipes
 users = mongo.db.users
@@ -167,4 +172,4 @@ def delete_recipe(id):
     return render_template("delete_confirm.html", todo=recipe_item)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=int(os.environ.get("PORT", 5000)))

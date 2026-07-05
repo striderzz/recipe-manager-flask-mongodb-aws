@@ -1,54 +1,53 @@
 {% extends "base.html" %}
 
 {% block title %}
-Recipe Form
+{{ 'Edit Recipe' if recipe else 'Add Recipe' }}
 {% endblock %}
 
 {% block content %}
-<div class="container mt-5" style="max-width: 600px;">
-  <h2 class="mb-4 text-center">{{ 'Edit Recipe' if recipe else 'Add Recipe' }}</h2>
+<div class="container mt-5" style="max-width: 640px;">
+  <div class="card p-4">
+    <h2 class="mb-4 text-center">{{ 'Edit Recipe' if recipe else 'Add Recipe' }}</h2>
 
-  <form method="POST" enctype="multipart/form-data">
-    <!-- Title -->
-    <div class="mb-3">
-      <label for="title" class="form-label">Title</label>
-      <input type="text" name="title" id="title" class="form-control" value="{{ recipe.title if recipe else '' }}" required>
-    </div>
+    <form method="POST" enctype="multipart/form-data" class="needs-validation" novalidate>
+      <div class="mb-3">
+        <label for="title" class="form-label">Title</label>
+        <input type="text" name="title" id="title" class="form-control" minlength="2" value="{{ recipe.title if recipe else '' }}" required>
+        <div class="invalid-feedback">Give your recipe a title.</div>
+      </div>
 
-    <!-- Ingredients -->
-    <div class="mb-3">
-      <label for="ingredients" class="form-label">Ingredients (comma-separated)</label>
-      <textarea name="ingredients" id="ingredients" class="form-control" rows="4" required>{{ recipe.ingredients if recipe else '' }}</textarea>
-    </div>
+      <div class="mb-3">
+        <label for="ingredients" class="form-label">Ingredients (comma-separated)</label>
+        <textarea name="ingredients" id="ingredients" class="form-control" rows="4" minlength="2" required>{{ recipe.ingredients if recipe else '' }}</textarea>
+        <div class="invalid-feedback">List at least one ingredient.</div>
+      </div>
 
-    <!-- Steps -->
-    <div class="mb-3">
-      <label for="steps" class="form-label">Steps</label>
-      <textarea name="steps" id="steps" class="form-control" rows="6" required>{{ recipe.steps if recipe else '' }}</textarea>
-    </div>
+      <div class="mb-3">
+        <label for="steps" class="form-label">Steps</label>
+        <textarea name="steps" id="steps" class="form-control" rows="6" minlength="2" required>{{ recipe.steps if recipe else '' }}</textarea>
+        <div class="invalid-feedback">Add the preparation steps.</div>
+      </div>
 
-    <!-- Category Dropdown -->
-    <div class="mb-3">
-      <label for="category" class="form-label">Category</label>
-      <select name="category" id="category" class="form-select">
-        {% for c in categories %}
-          <option value="{{ c }}" {% if recipe and recipe.category == c %}selected{% endif %}>{{ c }}</option>
-        {% endfor %}
-      </select>
-    </div>
+      <div class="mb-3">
+        <label for="category" class="form-label">Category</label>
+        <select name="category" id="category" class="form-select" required>
+          {% for c in categories %}
+            <option value="{{ c }}" {% if recipe and recipe.category == c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
 
-    <!-- Cuisine Dropdown -->
-    <div class="mb-4">
-      <label for="cuisine" class="form-label">Cuisine</label>
-      <select name="cuisine" id="cuisine" class="form-select">
-        {% for c in cuisines %}
-          <option value="{{ c }}" {% if recipe and recipe.cuisine == c %}selected{% endif %}>{{ c }}</option>
-        {% endfor %}
-      </select>
-    </div>
+      <div class="mb-4">
+        <label for="cuisine" class="form-label">Cuisine</label>
+        <select name="cuisine" id="cuisine" class="form-select" required>
+          {% for c in cuisines %}
+            <option value="{{ c }}" {% if recipe and recipe.cuisine == c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
 
-    <!-- Submit Button -->
-    <button type="submit" class="btn btn-primary w-100">{{ 'Update' if recipe else 'Add' }} Recipe</button>
-  </form>
+      <button type="submit" class="btn btn-primary w-100"><i class="bi bi-check2-circle"></i> {{ 'Update' if recipe else 'Add' }} Recipe</button>
+    </form>
+  </div>
 </div>
 {% endblock %}

@@ -1,0 +1,27 @@
+{
+  "family": "recipe-manager-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "recipe-manager",
+      "image": "<account-id>.dkr.ecr.<region>.amazonaws.com/recipe-manager:latest",
+      "portMappings": [{ "containerPort": 5000, "protocol": "tcp" }],
+      "secrets": [
+        { "name": "MONGO_URI", "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:recipe-manager/mongo-uri-XXXXXX" },
+        { "name": "SECRET_KEY", "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:recipe-manager/secret-key-XXXXXX" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/recipe-manager",
+          "awslogs-region": "<region>",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

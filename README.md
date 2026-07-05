@@ -1,105 +1,127 @@
-# Recipe Manager - Flask + MongoDB
+# Recipe Manager — Flask + MongoDB + Docker + AWS ECS Fargate
 
-A full-stack **Recipe Management Web Application** built using **Flask**, **MongoDB Atlas**, and **Bootstrap 5**.
+A full-stack recipe management web app built with **Flask** and **MongoDB Atlas**, containerized with **Docker**, and deployed to production on **AWS ECS Fargate** via **ECR**. Users register, log in, and manage a private collection of recipes with full CRUD.
 
-Users can securely register, log in, and manage their personal collection of recipes, including title, ingredients, steps, category, and cuisine.
+This project started as a local Flask + MongoDB app and was progressively hardened and shipped to the cloud: environment-based secrets, a redesigned UI, containerization, and a full AWS deployment pipeline (ECR → Secrets Manager → ECS Fargate).
 
 ---
 
 ## Features
 
-- User Authentication (Register, Login, Logout) using `Flask-Login`
-- Secure password hashing with `werkzeug.security`
-- Full CRUD functionality for recipes: Add, View, Edit, Delete
-- Recipe categorization by:
-  - **Category**: Breakfast, Lunch, Dinner, etc.
-  - **Cuisine**: Italian, Indian, Chinese, etc.
-- Cloud-based MongoDB Atlas database integration
-- Responsive frontend with Bootstrap 5 and custom CSS
-- Gradient backgrounds and a modern UI
-- Clean Flask code structure with modular routing
-
----
-
-## Tech Stack
-
-### Backend
-- [Flask](https://flask.palletsprojects.com/)
-- [Flask-Login](https://flask-login.readthedocs.io/en/latest/)
-- [Flask-PyMongo](https://flask-pymongo.readthedocs.io/)
-- [Werkzeug](https://werkzeug.palletsprojects.com/) (for password hashing)
-
-### Database
-- [MongoDB Atlas](https://www.mongodb.com/atlas)
-- BSON document handling with `bson.ObjectId`
-
-### Frontend
-- [Bootstrap 5](https://getbootstrap.com/)
-- Jinja2 Templates
-- HTML5 & CSS3
-
----
-
-## API Routes
-
-All core routes in the app:
-
-- `GET /`  
-  Redirects to the login page.
-
-- `GET, POST /register`  
-  Register a new user.
-
-- `GET, POST /login`  
-  Login with username and password.
-
-- `GET /logout`  
-  Logout the current user.
-
-- `GET /home`  
-  Dashboard showing all recipes for the logged-in user.
-
-- `GET /todos/<id>`  
-  View a specific recipe by ID.
-
-- `GET, POST /add_recipe`  
-  Add a new recipe to the user’s list.
-
-- `GET, POST /update_todo/<id>`  
-  Update the details of a specific recipe.
-
-- `GET, POST /delete_todo/<id>`  
-  Confirm and delete a recipe by ID.
-
-**Note:** All recipe-related routes are protected using `@login_required`.
-
----
+- User authentication (register/login/logout) via `Flask-Login`, with hashed passwords (`werkzeug.security`)
+- Full CRUD for recipes — title, ingredients, steps, category, cuisine — scoped per user
+- Client-side form validation (Bootstrap validation states, password-confirmation matching)
+- Dark/light theme toggle (persisted via `localStorage`), Inter typeface, Bootstrap Icons
+- Containerized with Docker, served via Gunicorn (multi-worker, threaded)
+- Deployed on AWS ECS Fargate, image hosted in Amazon ECR, secrets in AWS Secrets Manager
 
 ## Screenshots
 
-Add real screenshots here once available. Below are placeholders:
+| Login | Dashboard |
+|---|---|
+| ![Login](screenshots/login.png) | ![Dashboard](screenshots/dashboard.png) |
 
-### Login Page  
+| Recipe Detail | Light Mode |
+|---|---|
+| ![Recipe Detail](screenshots/recipe-detail.png) | ![Light Mode](screenshots/light-mode.png) |
 
-![recipe_login](https://github.com/user-attachments/assets/d8a0c085-a1e1-43ae-a6b8-1f434414d188)
+## Tech Stack
 
-### Register Page  
-![recipe_register](https://github.com/user-attachments/assets/7f3d7404-4938-4c9b-a16f-d206b1226a24)
+**Backend:** Flask, Flask-Login, Flask-PyMongo, Gunicorn
+**Database:** MongoDB Atlas (managed, cloud-hosted)
+**Frontend:** Jinja2, Bootstrap 5, Bootstrap Icons, vanilla JS
+**Infrastructure:** Docker, Amazon ECR, Amazon ECS (Fargate), AWS Secrets Manager, CloudWatch Logs
 
+## Architecture
 
-### Dashboard  
-![recipe_dashboard](https://github.com/user-attachments/assets/b58393c1-44fd-421e-b45d-726933468329)
+```
+Browser
+   │
+   ▼
+ECS Fargate Task (awsvpc networking, public IP)
+   │  Gunicorn (2 workers × 2 threads) → Flask app
+   │  Secrets injected at runtime from AWS Secrets Manager
+   ▼
+MongoDB Atlas (managed replica set, TLS)
+```
 
+The container image is built locally, pushed to a private **ECR** repository, and run as a Fargate task with no underlying EC2 instances to manage. `MONGO_URI` and `SECRET_KEY` are never baked into the image — they're injected at container start from **AWS Secrets Manager** via the ECS task definition.
 
-### Recipe Details  
-![recipe1](https://github.com/user-attachments/assets/bd17820b-ea16-4004-971c-09d4e78ac0b0)
+---
 
+## Local Development
 
-### Recipe Details 2
-![recipe2](https://github.com/user-attachments/assets/2e69923c-92b2-4961-99be-91c9f07c51bc)
+```bash
+python -m venv venv
+venv\Scripts\activate        # Windows
+pip install -r requirements.txt
+cp .env.example .env         # then fill in your own MONGO_URI and SECRET_KEY
+python app.py
+```
 
+## Running with Docker
 
-### Delete Confirmation  
+```bash
+docker build -t recipe-manager .
+docker run -p 5000:5000 --env-file .env recipe-manager
+```
 
-![recipe_delete](https://github.com/user-attachments/assets/afd4f4db-dc4f-45fe-8cf8-6857abb57b2a)
+> **Note:** `.env` values must **not** be wrapped in quotes (`MONGO_URI=mongodb+srv://...`, not `MONGO_URI="mongodb+srv://..."`). `python-dotenv` strips quotes automatically for local runs, but Docker's `--env-file` does not — quoted values will pass the literal quote character into the app and break the Mongo connection string.
 
+---
+
+## Deploying to AWS (ECR + ECS Fargate)
+
+High-level pipeline: **Docker image → ECR → Secrets Manager → ECS task definition → ECS cluster/service**.
+
+### 1. Push the image to ECR
+```bash
+aws ecr create-repository --repository-name recipe-manager --region <region>
+aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
+docker tag recipe-manager:latest <account-id>.dkr.ecr.<region>.amazonaws.com/recipe-manager:latest
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/recipe-manager:latest
+```
+
+### 2. Store secrets in Secrets Manager
+```bash
+aws secretsmanager create-secret --name recipe-manager/mongo-uri --secret-string "<your-mongo-uri>" --region <region>
+aws secretsmanager create-secret --name recipe-manager/secret-key --secret-string "<your-secret-key>" --region <region>
+```
+
+### 3. Register the task definition
+See [`task-definition.example.json`](task-definition.example.json) for the full template — it wires the container to the ECR image, the two secrets above, and a CloudWatch log group. Fill in your account ID, region, and secret ARNs, then:
+```bash
+aws ecs register-task-definition --cli-input-json file://task-definition.json --region <region>
+```
+
+### 4. Create the cluster, security group, and service
+```bash
+aws ecs create-cluster --cluster-name recipe-manager-cluster --region <region>
+aws ec2 create-security-group --group-name recipe-manager-sg --description "Recipe manager SG" --vpc-id <vpc-id>
+aws ec2 authorize-security-group-ingress --group-id <sg-id> --protocol tcp --port 5000 --cidr 0.0.0.0/0
+aws ecs create-service \
+  --cluster recipe-manager-cluster \
+  --service-name recipe-manager-service \
+  --task-definition recipe-manager-task \
+  --desired-count 1 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[<subnet-ids>],securityGroups=[<sg-id>],assignPublicIp=ENABLED}"
+```
+
+The running task's public IP can be found via `ecs describe-tasks` → its ENI → `ec2 describe-network-interfaces`.
+
+---
+
+## Lessons Learned / Troubleshooting Notes
+
+A few real issues hit during this deployment, worth knowing if you're doing this yourself:
+
+- **`.env` values in quotes break Docker's `--env-file`.** `python-dotenv` strips quotes; Docker does not. A quoted `MONGO_URI` passes a literal `"` character into the connection string and PyMongo rejects it as an invalid URI.
+- **Gunicorn's default single sync worker is fragile in production.** With only one worker and no request timeout tuning, a single slow/incomplete connection (e.g. a port scanner that opens a socket and never sends data) can block the whole app until Gunicorn's 30s default timeout kills the worker. Fixed by running multiple workers with threads: `gunicorn --workers 2 --threads 2 --timeout 60 app:app`.
+- **Exposing a raw container port directly to the internet invites scanner traffic.** With the security group open on `0.0.0.0/0` and no load balancer in front, automated bots constantly probe the port. An Application Load Balancer in front (with the security group locked down to ALB-only) is the proper fix, along with giving the service a stable DNS name instead of a Fargate task's ephemeral public IP.
+- **Chrome's "Always use secure connections" (HTTPS-First Mode) can make a plain-HTTP deployment look broken.** Chrome will attempt to upgrade a typed `http://` address to HTTPS; without a TLS listener behind that port, the connection just hangs until it times out. Firefox and Edge didn't exhibit this. Real fix: put HTTPS in front via an ALB + ACM certificate.
+- **A `ServerSelectionTimeoutError` / TLS alert from MongoDB does not necessarily mean an AWS permissions or security-group problem.** If the client got far enough to receive a TLS alert *from Atlas*, the network path (security group, routing, DNS) already worked — the rejection happened at the TLS/Atlas layer, not the AWS layer. Diagnosing "which layer actually failed" from the error message saved a lot of wasted effort second-guessing IAM and security groups that were already correct.
+
+## License
+
+This project is for portfolio/educational purposes.
