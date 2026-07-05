@@ -1,8 +1,14 @@
 # Recipe Manager — Flask + MongoDB + Docker + AWS ECS Fargate
 
-A full-stack recipe management web app built with **Flask** and **MongoDB Atlas**, containerized with **Docker**, and deployed to production on **AWS ECS Fargate** via **ECR**. Users register, log in, and manage a private collection of recipes with full CRUD.
+![Dashboard preview](screenshots/step-6-dashboard.png)
 
-This project started as a local Flask + MongoDB app and was progressively hardened and shipped to the cloud: environment-based secrets, a redesigned UI, containerization, and a full AWS deployment pipeline (ECR → Secrets Manager → ECS Fargate).
+A full-stack recipe management web app built with **Flask** and **MongoDB Atlas**, containerized with **Docker**, and deployed to production on **AWS ECS Fargate** via **ECR** and **Secrets Manager**. Users register, log in, and manage a private collection of recipes with full CRUD.
+
+This project started as a local Flask + MongoDB app and was progressively hardened and shipped to the cloud: environment-based secrets, a redesigned UI, containerization, and a full AWS deployment pipeline.
+
+```
+Local Dev ---> Docker Build ---> Amazon ECR ---> AWS Secrets Manager ---> ECS Task Definition ---> ECS Fargate Service ---> MongoDB Atlas
+```
 
 📄 **[Full deployment workflow write-up (PDF)](Recipe-Manager-Deployment-Workflow.pdf)** — architecture diagram, step-by-step pipeline, and lessons learned.
 
@@ -17,26 +23,6 @@ This project started as a local Flask + MongoDB app and was progressively harden
 - Containerized with Docker, served via Gunicorn (multi-worker, threaded)
 - Deployed on AWS ECS Fargate, image hosted in Amazon ECR, secrets in AWS Secrets Manager
 
-## Deployment Steps in Screenshots
-
-**Step 1 — Docker image built locally**
-![Step 1: Docker build](screenshots/step-1-docker-build.png)
-
-**Step 2 — Image pushed to Amazon ECR**
-![Step 2: ECR repository](screenshots/step-2-ecr-repository.png)
-
-**Step 3 — Running on an ECS Fargate cluster**
-![Step 3: ECS cluster](screenshots/step-3-ecs-cluster.png)
-
-**Step 4 — Application login**
-![Step 4: Login page](screenshots/step-4-login.png)
-
-**Step 5 — Recipe detail view**
-![Step 5: Recipe detail](screenshots/step-5-recipe-detail.png)
-
-**Step 6 — Recipe dashboard**
-![Step 6: Dashboard](screenshots/step-6-dashboard.png)
-
 ## Tech Stack
 
 **Backend:** Flask, Flask-Login, Flask-PyMongo, Gunicorn
@@ -44,20 +30,132 @@ This project started as a local Flask + MongoDB app and was progressively harden
 **Frontend:** Jinja2, Bootstrap 5, Bootstrap Icons, vanilla JS
 **Infrastructure:** Docker, Amazon ECR, Amazon ECS (Fargate), AWS Secrets Manager, CloudWatch Logs
 
+---
+
+## Database Structure
+
+MongoDB Atlas holds two collections in a single database. There's no foreign-key enforcement (MongoDB doesn't have joins the way a relational DB does) — the relationship is maintained at the application layer by storing the owning user's `_id` as a plain string on each recipe document.
+
+```
+users                                   recipes
+─────────────────────                   ─────────────────────────────────────
+_id          ObjectId  (primary key)    _id          ObjectId  (primary key)
+username     String    (unique)         title        String
+password     String    (scrypt hash)    ingredients  String   (comma-separated)
+                                         steps        String   (numbered, \n-separated)
+                                         category     String   (enum, see below)
+                                         cuisine      String   (enum, see below)
+                                         user_id      String   ---> references users._id
+```
+
+**Relationship:**
+```
+users._id  (one)  ------------------->  (many)  recipes.user_id
+```
+One user owns many recipes. Every read/write in `app.py` filters recipes by `{"user_id": current_user.id}`, so users can only ever see or modify their own recipes — enforced in application code, not by the database schema.
+
+**Enum values used by the app** (`app.py`):
+- `category` → `Breakfast | Lunch | Dinner | Dessert | Snack | Vegan | Beverage`
+- `cuisine` → `Italian | Indian | Chinese | Mexican | Thai | Japanese | American | Mediterranean | French | Middle Eastern`
+
+Passwords are never stored in plaintext — `werkzeug.security.generate_password_hash` salts and hashes them (scrypt) before the `users.insert_one(...)` call, and `check_password_hash` verifies on login without ever decrypting anything back to plaintext.
+
+---
+
 ## Architecture
 
 ```
-Browser
-   │
-   ▼
-ECS Fargate Task (awsvpc networking, public IP)
-   │  Gunicorn (2 workers × 2 threads) → Flask app
-   │  Secrets injected at runtime from AWS Secrets Manager
-   ▼
-MongoDB Atlas (managed replica set, TLS)
+                                   ┌─────────────────────────────┐
+                                   │   ECS Fargate Task           │
+   Browser  ────────────────────► │   (awsvpc networking,        │ ────────────►  MongoDB Atlas
+   (login / recipes)              │    public IP)                │   TLS          (managed replica set)
+                                   │                               │
+                                   │   Gunicorn: 2 workers x 2     │
+                                   │   threads ---> Flask app      │
+                                   │                               │
+                                   │   Secrets injected at         │
+                                   │   container start from        │
+                                   │   AWS Secrets Manager         │
+                                   └─────────────────────────────┘
 ```
 
-The container image is built locally, pushed to a private **ECR** repository, and run as a Fargate task with no underlying EC2 instances to manage. `MONGO_URI` and `SECRET_KEY` are never baked into the image — they're injected at container start from **AWS Secrets Manager** via the ECS task definition.
+The container image is built locally, pushed to a private **ECR** repository, and run as a Fargate task with no underlying EC2 instances to manage or patch. `MONGO_URI` and `SECRET_KEY` are never baked into the image — they're injected at container start from **AWS Secrets Manager** via the ECS task definition, so the same image can be redeployed to any account/environment without ever containing a secret.
+
+---
+
+## Deploying to AWS — Full Process
+
+The pipeline in one line:
+
+```
+Docker Image ---> Amazon ECR ---> AWS Secrets Manager ---> ECS Task Definition ---> ECS Cluster / Fargate Service
+```
+
+Why each piece exists:
+
+| Service | Role | Why not the alternative |
+|---|---|---|
+| **Amazon ECR** | Private, versioned container registry | Docker Hub public repos would expose the image; ECR integrates natively with ECS's IAM permissions |
+| **AWS Secrets Manager** | Stores `MONGO_URI` / `SECRET_KEY` outside the image | Environment variables set directly in a task definition are visible to anyone who can read ECS console/API; Secrets Manager encrypts at rest and audits access |
+| **ECS Task Definition** | Blueprint: image, CPU/memory, port mapping, secrets, logging | Needed regardless of launch type — it's the "what to run" independent of "where to run it" |
+| **ECS Fargate** | Serverless container hosting | No EC2 instances to provision, patch, or scale manually — AWS manages the underlying compute |
+| **CloudWatch Logs** | Centralized container stdout/stderr | Without it, debugging a crashed/restarted Fargate task means the logs are just gone |
+
+### Step 1 — Push the image to ECR
+```bash
+aws ecr create-repository --repository-name recipe-manager --region <region>
+aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
+docker tag recipe-manager:latest <account-id>.dkr.ecr.<region>.amazonaws.com/recipe-manager:latest
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/recipe-manager:latest
+```
+This builds the image once locally, then uploads it to a private repository only your AWS account (and IAM roles you grant) can pull from.
+
+### Step 2 — Store secrets in Secrets Manager
+```bash
+aws secretsmanager create-secret --name recipe-manager/mongo-uri --secret-string "<your-mongo-uri>" --region <region>
+aws secretsmanager create-secret --name recipe-manager/secret-key --secret-string "<your-secret-key>" --region <region>
+```
+Each command returns an ARN — that ARN (not the secret value itself) is what gets referenced in the task definition below.
+
+### Step 3 — Register the task definition
+```
+ECR image URI  ---\
+                    >---  ECS Task Definition (recipe-manager-task)
+Secret ARNs    ---/            |
+                                +--- CPU: 256, Memory: 512 (Fargate-compatible)
+                                +--- Port mapping: container 5000
+                                +--- Log group: /ecs/recipe-manager
+```
+See [`task-definition.example.json`](task-definition.example.json) for the full template. Fill in your account ID, region, and the two secret ARNs from Step 2, then:
+```bash
+aws ecs register-task-definition --cli-input-json file://task-definition.json --region <region>
+```
+
+### Step 4 — Create the cluster, security group, and service
+```bash
+aws ecs create-cluster --cluster-name recipe-manager-cluster --region <region>
+aws ec2 create-security-group --group-name recipe-manager-sg --description "Recipe manager SG" --vpc-id <vpc-id>
+aws ec2 authorize-security-group-ingress --group-id <sg-id> --protocol tcp --port 5000 --cidr 0.0.0.0/0
+aws ecs create-service \
+  --cluster recipe-manager-cluster \
+  --service-name recipe-manager-service \
+  --task-definition recipe-manager-task \
+  --desired-count 1 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[<subnet-ids>],securityGroups=[<sg-id>],assignPublicIp=ENABLED}"
+```
+The **cluster** is just a logical grouping; the **service** is what actually keeps `desiredCount` tasks running, replacing any that crash. `awsvpc` networking gives the Fargate task its own elastic network interface (ENI) with a real public IP.
+
+### Step 5 — Find the running task and verify it
+```bash
+aws ecs list-tasks --cluster recipe-manager-cluster --region <region>
+aws ecs describe-tasks --cluster recipe-manager-cluster --tasks <task-arn> --region <region>
+aws ec2 describe-network-interfaces --network-interface-ids <eni-id> --region <region>
+```
+The last command's `Association.PublicIp` is the address the app is reachable at. Watch logs with:
+```bash
+aws logs tail /ecs/recipe-manager --region <region> --since 15m
+```
 
 ---
 
@@ -82,48 +180,6 @@ docker run -p 5000:5000 --env-file .env recipe-manager
 
 ---
 
-## Deploying to AWS (ECR + ECS Fargate)
-
-High-level pipeline: **Docker image → ECR → Secrets Manager → ECS task definition → ECS cluster/service**.
-
-### 1. Push the image to ECR
-```bash
-aws ecr create-repository --repository-name recipe-manager --region <region>
-aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
-docker tag recipe-manager:latest <account-id>.dkr.ecr.<region>.amazonaws.com/recipe-manager:latest
-docker push <account-id>.dkr.ecr.<region>.amazonaws.com/recipe-manager:latest
-```
-
-### 2. Store secrets in Secrets Manager
-```bash
-aws secretsmanager create-secret --name recipe-manager/mongo-uri --secret-string "<your-mongo-uri>" --region <region>
-aws secretsmanager create-secret --name recipe-manager/secret-key --secret-string "<your-secret-key>" --region <region>
-```
-
-### 3. Register the task definition
-See [`task-definition.example.json`](task-definition.example.json) for the full template — it wires the container to the ECR image, the two secrets above, and a CloudWatch log group. Fill in your account ID, region, and secret ARNs, then:
-```bash
-aws ecs register-task-definition --cli-input-json file://task-definition.json --region <region>
-```
-
-### 4. Create the cluster, security group, and service
-```bash
-aws ecs create-cluster --cluster-name recipe-manager-cluster --region <region>
-aws ec2 create-security-group --group-name recipe-manager-sg --description "Recipe manager SG" --vpc-id <vpc-id>
-aws ec2 authorize-security-group-ingress --group-id <sg-id> --protocol tcp --port 5000 --cidr 0.0.0.0/0
-aws ecs create-service \
-  --cluster recipe-manager-cluster \
-  --service-name recipe-manager-service \
-  --task-definition recipe-manager-task \
-  --desired-count 1 \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[<subnet-ids>],securityGroups=[<sg-id>],assignPublicIp=ENABLED}"
-```
-
-The running task's public IP can be found via `ecs describe-tasks` → its ENI → `ec2 describe-network-interfaces`.
-
----
-
 ## Persistent Storage
 
 Fargate tasks are **ephemeral by design** — any file written inside the container's own filesystem is lost the moment the task restarts, redeploys, or scales. This app avoids that problem entirely by keeping all persistent data outside the container:
@@ -132,6 +188,26 @@ Fargate tasks are **ephemeral by design** — any file written inside the contai
 - **Sessions are stateless.** `Flask-Login` signs session cookies with `SECRET_KEY` and stores them client-side in the browser, not in server memory. Any instance can serve any request without a shared session store, since `SECRET_KEY` is identical across instances (injected from the same Secrets Manager secret).
 - **Write durability**: the Mongo connection string includes `retryWrites=true&w=majority`, meaning writes are acknowledged by a majority of the Atlas replica set before the app gets a success response — no risk of losing an acknowledged write to a single-node failure.
 - This app doesn't currently handle file uploads (e.g. recipe photos). If that were added, those files would need to go to **Amazon S3** rather than the container's local disk, for the same ephemeral-storage reason.
+
+## Deployment Steps in Screenshots
+
+**Step 1 — Docker image built locally**
+![Step 1: Docker build](screenshots/step-1-docker-build.png)
+
+**Step 2 — Image pushed to Amazon ECR**
+![Step 2: ECR repository](screenshots/step-2-ecr-repository.png)
+
+**Step 3 — Running on an ECS Fargate cluster**
+![Step 3: ECS cluster](screenshots/step-3-ecs-cluster.png)
+
+**Step 4 — Application login**
+![Step 4: Login page](screenshots/step-4-login.png)
+
+**Step 5 — Recipe detail view**
+![Step 5: Recipe detail](screenshots/step-5-recipe-detail.png)
+
+**Step 6 — Recipe dashboard**
+![Step 6: Dashboard](screenshots/step-6-dashboard.png)
 
 ## Lessons Learned / Troubleshooting Notes
 
